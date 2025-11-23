@@ -15,9 +15,11 @@ from clapper import (
     DetectorConfig,
     DoubleClapDetector,
     ProcessToggler,
+    build_audio_callback,
     build_detector_config,
     listen_and_toggle,
     make_cli,
+    process_event_loop,
 )
 
 
@@ -132,3 +134,43 @@ def test_listen_and_toggle_processes_double_event() -> None:
 
     toggler_mock.toggle.assert_called_once()
     toggler_mock.stop.assert_called_once()
+
+
+def test_build_audio_callback_queues_double_event() -> None:
+    detector = mock.create_autospec(DoubleClapDetector, instance=True)
+    detector.process_block.return_value = True
+    events: queue.SimpleQueue[str] = queue.SimpleQueue()
+    logger = mock.create_autospec(logging.Logger)
+
+    callback = build_audio_callback(detector, logger, events, time_fn=lambda: 1.0)
+
+    indata = np.ones((4, 1), dtype=np.float32)
+    callback(indata, 4, {}, sd.CallbackFlags(1))
+
+    assert events.get_nowait() == "double"
+    detector.process_block.assert_called_once()
+    logger.warning.assert_called_once()
+
+
+def test_process_event_loop_toggles_and_logs() -> None:
+    events: queue.SimpleQueue[str] = queue.SimpleQueue()
+    events.put("double")
+    events.put("double")
+
+    toggler = mock.create_autospec(ProcessToggler, instance=True)
+    toggler.toggle.side_effect = [True, False]
+    logger = mock.create_autospec(logging.Logger)
+
+    processed = process_event_loop(
+        events=events,
+        toggler=toggler,
+        logger=logger,
+        command=["echo", "hi"],
+        poll_timeout=0.01,
+        max_events=2,
+        processed=0,
+    )
+
+    assert processed == 2
+    assert toggler.toggle.call_count == 2
+    assert logger.info.call_count == 2
