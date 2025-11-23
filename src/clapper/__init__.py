@@ -208,21 +208,7 @@ def listen_and_toggle(
     detector = DoubleClapDetector(config, now=time_fn())
     events: queue.SimpleQueue[str] = event_queue or queue.SimpleQueue()
     toggler = toggler_factory(args.command)
-
-    def audio_callback(
-        indata: NDArray[np.float32],
-        frames: int,
-        time_info: Any,
-        status: sd.CallbackFlags,
-    ) -> None:
-        if status:
-            # Stash the status string to stderr so the loop can continue listening.
-            logger.warning("[clapper] Audio status: %s", status)
-        now = time_fn()
-        # Use the first channel only; mono is sufficient for clap detection.
-        samples: NDArray[np.float32] = np.asarray(indata[:, 0], dtype=np.float32)
-        if detector.process_block(samples, now):
-            events.put("double")
+    audio_callback = build_audio_callback(detector, logger, events, time_fn)
 
     device = args.device
     logger.info(
@@ -243,26 +229,73 @@ def listen_and_toggle(
             device=device,
             dtype="float32",
         ):
-            while True:
-                try:
-                    event = events.get(timeout=poll_timeout)
-                except queue.Empty:
-                    continue
-                if event == "double":
-                    starting = toggler.toggle()
-                    state = "started" if starting else "stopped"
-                    logger.info(
-                        "[clapper] Double clap detected, %s %s",
-                        state,
-                        format_command(args.command),
-                    )
-                    processed += 1
-                    if max_events is not None and processed >= max_events:
-                        break
+            processed = process_event_loop(
+                events=events,
+                toggler=toggler,
+                logger=logger,
+                command=args.command,
+                poll_timeout=poll_timeout,
+                max_events=max_events,
+                processed=processed,
+            )
     except KeyboardInterrupt:
         pass
     finally:
         toggler.stop()
+
+
+def build_audio_callback(
+    detector: DoubleClapDetector,
+    logger: logging.Logger,
+    events: queue.SimpleQueue[str],
+    time_fn: Callable[[], float],
+) -> Callable[[NDArray[np.float32], int, Any, sd.CallbackFlags], None]:
+    def audio_callback(
+        indata: NDArray[np.float32],
+        frames: int,
+        time_info: Any,
+        status: sd.CallbackFlags,
+    ) -> None:
+        if status:
+            # Stash the status string to stderr so the loop can continue listening.
+            logger.warning("[clapper] Audio status: %s", status)
+        now = time_fn()
+        # Use the first channel only; mono is sufficient for clap detection.
+        samples: NDArray[np.float32] = np.asarray(indata[:, 0], dtype=np.float32)
+        if detector.process_block(samples, now):
+            events.put("double")
+
+    return audio_callback
+
+
+def process_event_loop(
+    *,
+    events: queue.SimpleQueue[str],
+    toggler: ProcessToggler,
+    logger: logging.Logger,
+    command: Sequence[str],
+    poll_timeout: float,
+    max_events: Optional[int],
+    processed: int,
+) -> int:
+    while True:
+        try:
+            event = events.get(timeout=poll_timeout)
+        except queue.Empty:
+            continue
+        if event == "double":
+            starting = toggler.toggle()
+            state = "started" if starting else "stopped"
+            logger.info(
+                "[clapper] Double clap detected, %s %s",
+                state,
+                format_command(command),
+            )
+            processed += 1
+            if max_events is not None and processed >= max_events:
+                break
+
+    return processed
 
 
 CONTEXT_SETTINGS = {
