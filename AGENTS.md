@@ -19,15 +19,15 @@
   target command must be separated from clapper flags with `--`; otherwise the
   CLI exits with code 2 and prints a hint. Test tone:
   `python -m clapper.test_tone --freq 880 --duration 0.5 --loop`.
-- Lint/format: `ruff check` and `ruff format` (run manually if you want, but the
-  pre-commit hook will handle them on commit).
+- Lint/format: `ruff check` and `ruff format` (run manually if you want; the
+  pre-commit hook runs them automatically on commit).
 - Type check: `mypy`.
 - Test suite: `pytest`.
 
 ## Coding Style & Naming Conventions
 
 - Python 3.14+; prefer 4-space indentation and type hints everywhere. Ruff
-  enforces imports/style; ruff format controls layout—run it before committing.
+  enforces imports/style; ruff format controls layout.
 - Keep modules small; favour pure functions; avoid side effects at import time.
 - CLI flags and public options should stay snake_case internally; command names
   stay kebab-case when exposed.
@@ -53,8 +53,7 @@
   tuning to detection parameters; attach screenshots or logs if CLI output
   changed.
 - Commit hook already runs pre-commit (ruff, pytest, mypy); rerun
-  `pre-commit run --all-files` only if you want to reproduce hook output—no need
-  to run ruff/mypy/pytest manually before committing unless you prefer.
+  `pre-commit run --all-files` only if you want to reproduce hook output.
 
 ## Environment & Operational Tips
 
