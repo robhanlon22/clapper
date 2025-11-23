@@ -173,6 +173,14 @@ def build_detector_config(args: CliOptions) -> DetectorConfig:
         raise SystemExit(
             "double-window values must be positive and MIN must be less than MAX."
         )
+    if args.clap_cooldown >= double_max:
+        raise SystemExit(
+            "clap-cooldown must be less than the double-window MAX to allow a second clap."
+        )
+    if args.clap_cooldown > double_min:
+        raise SystemExit(
+            "clap-cooldown should not exceed the double-window MIN or double claps become impossible."
+        )
     return DetectorConfig(
         sample_rate=int(args.sample_rate),
         block_size=int(args.block_size),

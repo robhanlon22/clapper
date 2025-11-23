@@ -69,6 +69,40 @@ def test_build_detector_config_validates_window() -> None:
         build_detector_config(args)
 
 
+def test_build_detector_config_rejects_cooldown_overlaps() -> None:
+    args = CliOptions(
+        command=["echo"],
+        device=None,
+        sample_rate=44_100,
+        block_size=1024,
+        threshold_multiplier=6.0,
+        min_absolute_peak=0.04,
+        double_window=(0.16, 0.2),
+        warmup=0.3,
+        clap_cooldown=0.2,
+    )
+
+    with pytest.raises(SystemExit):
+        build_detector_config(args)
+
+
+def test_build_detector_config_rejects_cooldown_above_min() -> None:
+    args = CliOptions(
+        command=["echo"],
+        device=None,
+        sample_rate=44_100,
+        block_size=1024,
+        threshold_multiplier=6.0,
+        min_absolute_peak=0.04,
+        double_window=(0.16, 0.2),
+        warmup=0.3,
+        clap_cooldown=0.17,
+    )
+
+    with pytest.raises(SystemExit):
+        build_detector_config(args)
+
+
 def test_cli_passes_flags_through_to_command() -> None:
     received: list[Sequence[str]] = []
 
