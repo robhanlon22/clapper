@@ -46,17 +46,6 @@ class CliOptions:
     clap_cooldown: float
 
 
-@dataclass
-class RuntimeDeps:
-    stream_factory: Callable[..., ContextManager[Any]]
-    time_fn: Callable[[], float]
-    toggler_factory: Callable[[Sequence[str]], ProcessToggler]
-    event_queue: queue.SimpleQueue[str]
-    poll_timeout: float = 0.5
-    max_events: Optional[int] = None
-    logger: logging.Logger = logging.getLogger(__name__)
-
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -200,23 +189,25 @@ def format_command(cmd: Iterable[str]) -> str:
     return " ".join(shlex.quote(part) for part in cmd)
 
 
-def listen_and_toggle(args: CliOptions, deps: Optional[RuntimeDeps] = None) -> None:
-    runtime = deps or RuntimeDeps(
-        stream_factory=sd.InputStream,
-        time_fn=time.monotonic,
-        toggler_factory=ProcessToggler,
-        event_queue=queue.SimpleQueue(),
-        logger=LOGGER,
-    )
-
+def listen_and_toggle(
+    args: CliOptions,
+    *,
+    stream_factory: Callable[..., ContextManager[Any]] = sd.InputStream,
+    time_fn: Callable[[], float] = time.monotonic,
+    toggler_factory: Callable[[Sequence[str]], ProcessToggler] = ProcessToggler,
+    event_queue: Optional[queue.SimpleQueue[str]] = None,
+    poll_timeout: float = 0.5,
+    max_events: Optional[int] = None,
+    logger: logging.Logger = LOGGER,
+) -> None:
     if not args.command:
-        runtime.logger.error("No command specified. Example: clapper -- python app.py")
+        logger.error("No command specified. Example: clapper -- python app.py")
         sys.exit(1)
 
     config = build_detector_config(args)
-    detector = DoubleClapDetector(config, now=runtime.time_fn())
-    events: queue.SimpleQueue[str] = runtime.event_queue
-    toggler = runtime.toggler_factory(args.command)
+    detector = DoubleClapDetector(config, now=time_fn())
+    events: queue.SimpleQueue[str] = event_queue or queue.SimpleQueue()
+    toggler = toggler_factory(args.command)
 
     def audio_callback(
         indata: NDArray[np.float32],
@@ -226,25 +217,25 @@ def listen_and_toggle(args: CliOptions, deps: Optional[RuntimeDeps] = None) -> N
     ) -> None:
         if status:
             # Stash the status string to stderr so the loop can continue listening.
-            runtime.logger.warning("[clapper] Audio status: %s", status)
-        now = runtime.time_fn()
+            logger.warning("[clapper] Audio status: %s", status)
+        now = time_fn()
         # Use the first channel only; mono is sufficient for clap detection.
         samples: NDArray[np.float32] = np.asarray(indata[:, 0], dtype=np.float32)
         if detector.process_block(samples, now):
             events.put("double")
 
     device = args.device
-    runtime.logger.info(
+    logger.info(
         f"Listening for double claps (device={device or 'default'}, "
         f"double window={config.double_clap_min:.2f}-{config.double_clap_max:.2f}s, "
         f"threshold x{config.threshold_multiplier:g}).",
     )
-    runtime.logger.info("Target command: %s", format_command(args.command))
-    runtime.logger.info("Clap twice to toggle. Ctrl+C to quit.")
+    logger.info("Target command: %s", format_command(args.command))
+    logger.info("Clap twice to toggle. Ctrl+C to quit.")
 
     processed = 0
     try:
-        with runtime.stream_factory(
+        with stream_factory(
             channels=1,
             callback=audio_callback,
             samplerate=config.sample_rate,
@@ -254,22 +245,19 @@ def listen_and_toggle(args: CliOptions, deps: Optional[RuntimeDeps] = None) -> N
         ):
             while True:
                 try:
-                    event = events.get(timeout=runtime.poll_timeout)
+                    event = events.get(timeout=poll_timeout)
                 except queue.Empty:
                     continue
                 if event == "double":
                     starting = toggler.toggle()
                     state = "started" if starting else "stopped"
-                    runtime.logger.info(
+                    logger.info(
                         "[clapper] Double clap detected, %s %s",
                         state,
                         format_command(args.command),
                     )
                     processed += 1
-                    if (
-                        runtime.max_events is not None
-                        and processed >= runtime.max_events
-                    ):
+                    if max_events is not None and processed >= max_events:
                         break
     except KeyboardInterrupt:
         pass

@@ -15,7 +15,6 @@ from clapper import (
     DetectorConfig,
     DoubleClapDetector,
     ProcessToggler,
-    RuntimeDeps,
     build_detector_config,
     listen_and_toggle,
     make_cli,
@@ -122,15 +121,13 @@ def test_listen_and_toggle_processes_double_event() -> None:
             warmup=0.3,
             clap_cooldown=0.12,
         ),
-        deps=RuntimeDeps(
-            stream_factory=build_stream,
-            time_fn=time_fn,
-            toggler_factory=lambda cmd: cast(ProcessToggler, toggler_mock),
-            event_queue=queue.SimpleQueue(),
-            poll_timeout=0.1,
-            max_events=1,
-            logger=logger,
-        ),
+        stream_factory=build_stream,
+        time_fn=time_fn,
+        toggler_factory=lambda cmd: cast(ProcessToggler, toggler_mock),
+        event_queue=queue.SimpleQueue(),
+        poll_timeout=0.1,
+        max_events=1,
+        logger=logger,
     )
 
     toggler_mock.toggle.assert_called_once()
