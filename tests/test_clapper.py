@@ -9,10 +9,10 @@ import numpy as np
 import pytest
 import sounddevice as sd
 from click.testing import CliRunner
+from pydantic import ValidationError
 
 from clapper import (
     CliOptions,
-    DetectorConfig,
     DoubleClapDetector,
     ProcessToggler,
     build_audio_callback,
@@ -47,8 +47,7 @@ def _make_stream(callbacks: Iterable[Callable[[], None]]) -> mock.MagicMock:
 
 
 def test_double_clap_detector_detects_within_window() -> None:
-    config = DetectorConfig()
-    detector = DoubleClapDetector(config, now=0.0)
+    detector = DoubleClapDetector(default_config, now=0.0)
     samples = np.ones(1024, dtype=np.float32)
 
     assert detector.process_block(samples, now=0.29) is False  # still warming up
@@ -57,52 +56,55 @@ def test_double_clap_detector_detects_within_window() -> None:
 
 
 def test_build_detector_config_validates_window() -> None:
-    args = CliOptions(
-        command=["echo"],
-        device=None,
-        sample_rate=default_config.sample_rate,
-        block_size=default_config.block_size,
-        threshold_multiplier=default_config.threshold_multiplier,
-        min_absolute_peak=default_config.min_absolute_peak,
-        double_window=(0.5, 0.2),
-        warmup=default_config.warmup_seconds,
-        clap_cooldown=default_config.min_clap_interval,
-    )
-    with pytest.raises(SystemExit):
+    with pytest.raises(ValidationError):
+        args = CliOptions(
+            command=["echo"],
+            device=None,
+            sample_rate=default_config.sample_rate,
+            block_size=default_config.block_size,
+            threshold_multiplier=default_config.threshold_multiplier,
+            min_absolute_peak=default_config.min_absolute_peak,
+            double_window=(0.5, 0.2),
+            warmup=default_config.warmup_seconds,
+            clap_cooldown=default_config.min_clap_interval,
+            noise_floor_halflife=default_config.noise_floor_halflife,
+        )
         build_detector_config(args)
 
 
 def test_build_detector_config_rejects_cooldown_overlaps() -> None:
-    args = CliOptions(
-        command=["echo"],
-        device=None,
-        sample_rate=44_100,
-        block_size=1024,
-        threshold_multiplier=6.0,
-        min_absolute_peak=0.04,
-        double_window=(0.16, 0.2),
-        warmup=0.3,
-        clap_cooldown=0.2,
-    )
+    with pytest.raises(ValidationError):
+        args = CliOptions(
+            command=["echo"],
+            device=None,
+            sample_rate=44_100,
+            block_size=1024,
+            threshold_multiplier=6.0,
+            min_absolute_peak=0.04,
+            double_window=(0.16, 0.2),
+            warmup=0.3,
+            clap_cooldown=0.2,
+            noise_floor_halflife=default_config.noise_floor_halflife,
+        )
 
-    with pytest.raises(SystemExit):
         build_detector_config(args)
 
 
 def test_build_detector_config_rejects_cooldown_above_min() -> None:
-    args = CliOptions(
-        command=["echo"],
-        device=None,
-        sample_rate=44_100,
-        block_size=1024,
-        threshold_multiplier=6.0,
-        min_absolute_peak=0.04,
-        double_window=(0.16, 0.2),
-        warmup=0.3,
-        clap_cooldown=0.17,
-    )
+    with pytest.raises(ValidationError):
+        args = CliOptions(
+            command=["echo"],
+            device=None,
+            sample_rate=44_100,
+            block_size=1024,
+            threshold_multiplier=6.0,
+            min_absolute_peak=0.04,
+            double_window=(0.16, 0.2),
+            warmup=0.3,
+            clap_cooldown=0.17,
+            noise_floor_halflife=default_config.noise_floor_halflife,
+        )
 
-    with pytest.raises(SystemExit):
         build_detector_config(args)
 
 
@@ -160,6 +162,7 @@ def test_listen_and_toggle_processes_double_event() -> None:
             ),
             warmup=default_config.warmup_seconds,
             clap_cooldown=default_config.min_clap_interval,
+            noise_floor_halflife=default_config.noise_floor_halflife,
         ),
         stream_factory=build_stream,
         time_fn=time_fn,

@@ -12,12 +12,11 @@ repos:
         name: prettier
         entry: prettier --write --ignore-unknown
         language: system
-      - id: mise-fmt
-        name: mise fmt
-        entry: mise fmt
+      - id: taplo
+        name: taplo
+        entry: taplo fmt
         language: system
-        files: ^mise\.toml$
-        pass_filenames: false
+        types: [toml]
       - id: ruff-check
         name: ruff check
         entry: ruff check --fix
