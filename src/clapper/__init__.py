@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import queue
 import shlex
@@ -8,7 +9,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Callable, ContextManager, Iterable, Optional, Sequence
 
 import click
 import numpy as np
@@ -43,6 +44,9 @@ class CliOptions:
     double_window: tuple[float, float]
     warmup: float
     clap_cooldown: float
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DoubleClapDetector:
@@ -115,7 +119,7 @@ class ProcessToggler:
         creationflags = 0
         start_new_session = False
         if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             start_new_session = True
 
@@ -185,17 +189,25 @@ def format_command(cmd: Iterable[str]) -> str:
     return " ".join(shlex.quote(part) for part in cmd)
 
 
-def listen_and_toggle(args: CliOptions) -> None:
+def listen_and_toggle(
+    args: CliOptions,
+    *,
+    stream_factory: Callable[..., ContextManager[Any]] = sd.InputStream,
+    time_fn: Callable[[], float] = time.monotonic,
+    toggler_factory: Callable[[Sequence[str]], ProcessToggler] = ProcessToggler,
+    event_queue: Optional[queue.SimpleQueue[str]] = None,
+    poll_timeout: float = 0.5,
+    max_events: Optional[int] = None,
+    logger: logging.Logger = LOGGER,
+) -> None:
     if not args.command:
-        print(
-            "No command specified. Example: clapper -- python app.py", file=sys.stderr
-        )
+        logger.error("No command specified. Example: clapper -- python app.py")
         sys.exit(1)
 
     config = build_detector_config(args)
-    detector = DoubleClapDetector(config, now=time.monotonic())
-    events: queue.SimpleQueue[str] = queue.SimpleQueue()
-    toggler = ProcessToggler(args.command)
+    detector = DoubleClapDetector(config, now=time_fn())
+    events: queue.SimpleQueue[str] = event_queue or queue.SimpleQueue()
+    toggler = toggler_factory(args.command)
 
     def audio_callback(
         indata: NDArray[np.float32],
@@ -205,25 +217,25 @@ def listen_and_toggle(args: CliOptions) -> None:
     ) -> None:
         if status:
             # Stash the status string to stderr so the loop can continue listening.
-            print(f"[clapper] Audio status: {status}", file=sys.stderr)
-        now = time.monotonic()
+            logger.warning("[clapper] Audio status: %s", status)
+        now = time_fn()
         # Use the first channel only; mono is sufficient for clap detection.
         samples: NDArray[np.float32] = np.asarray(indata[:, 0], dtype=np.float32)
         if detector.process_block(samples, now):
             events.put("double")
 
     device = args.device
-    print(
+    logger.info(
         f"Listening for double claps (device={device or 'default'}, "
         f"double window={config.double_clap_min:.2f}-{config.double_clap_max:.2f}s, "
         f"threshold x{config.threshold_multiplier:g}).",
-        file=sys.stderr,
     )
-    print(f"Target command: {format_command(args.command)}", file=sys.stderr)
-    print("Clap twice to toggle. Ctrl+C to quit.", file=sys.stderr)
+    logger.info("Target command: %s", format_command(args.command))
+    logger.info("Clap twice to toggle. Ctrl+C to quit.")
 
+    processed = 0
     try:
-        with sd.InputStream(
+        with stream_factory(
             channels=1,
             callback=audio_callback,
             samplerate=config.sample_rate,
@@ -233,16 +245,20 @@ def listen_and_toggle(args: CliOptions) -> None:
         ):
             while True:
                 try:
-                    event = events.get(timeout=0.5)
+                    event = events.get(timeout=poll_timeout)
                 except queue.Empty:
                     continue
                 if event == "double":
                     starting = toggler.toggle()
                     state = "started" if starting else "stopped"
-                    print(
-                        f"[clapper] Double clap detected, {state} {format_command(args.command)}",
-                        file=sys.stderr,
+                    logger.info(
+                        "[clapper] Double clap detected, %s %s",
+                        state,
+                        format_command(args.command),
                     )
+                    processed += 1
+                    if max_events is not None and processed >= max_events:
+                        break
     except KeyboardInterrupt:
         pass
     finally:
@@ -256,94 +272,104 @@ CONTEXT_SETTINGS = {
 }
 
 
-@click.command(
-    context_settings=CONTEXT_SETTINGS,
-    help="Toggle a program on/off with a double clap.",
-)
-@click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
-@click.option(
-    "--device",
-    type=str,
-    default=None,
-    show_default="default input device",
-    help="Audio input device name or index.",
-)
-@click.option(
-    "--sample-rate",
-    type=int,
-    default=44_100,
-    show_default=True,
-    help="Sample rate used for capture.",
-)
-@click.option(
-    "--block-size",
-    type=int,
-    default=1024,
-    show_default=True,
-    help="Frames per audio block.",
-)
-@click.option(
-    "--threshold-multiplier",
-    type=float,
-    default=6.0,
-    show_default=True,
-    help="How far above the ambient noise the peak must be to count as a clap.",
-)
-@click.option(
-    "--min-absolute-peak",
-    type=float,
-    default=0.04,
-    show_default=True,
-    help="Hard minimum peak amplitude needed to count as a clap.",
-)
-@click.option(
-    "--double-window",
-    nargs=2,
-    type=float,
-    metavar="MIN MAX",
-    default=(0.16, 0.65),
-    show_default=True,
-    help="Acceptable gap (seconds) between claps that forms a double clap.",
-)
-@click.option(
-    "--warmup",
-    type=float,
-    default=0.3,
-    show_default=True,
-    help="Seconds to learn the room noise floor before detecting claps.",
-)
-@click.option(
-    "--clap-cooldown",
-    type=float,
-    default=0.12,
-    show_default=True,
-    help="Minimum seconds between individual clap detections.",
-)
-def cli(
-    command: tuple[str, ...],
-    device: Optional[str],
-    sample_rate: int,
-    block_size: int,
-    threshold_multiplier: float,
-    min_absolute_peak: float,
-    double_window: tuple[float, float],
-    warmup: float,
-    clap_cooldown: float,
-) -> None:
-    """Entry point for the clapper CLI."""
-    options = CliOptions(
-        command=list(command),
-        device=device,
-        sample_rate=sample_rate,
-        block_size=block_size,
-        threshold_multiplier=threshold_multiplier,
-        min_absolute_peak=min_absolute_peak,
-        double_window=double_window,
-        warmup=warmup,
-        clap_cooldown=clap_cooldown,
+def make_cli(
+    listener: Callable[[CliOptions], None] = listen_and_toggle,
+) -> click.Command:
+    @click.command(
+        context_settings=CONTEXT_SETTINGS,
+        help="Toggle a program on/off with a double clap.",
     )
-    listen_and_toggle(options)
+    @click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
+    @click.option(
+        "--device",
+        type=str,
+        default=None,
+        show_default="default input device",
+        help="Audio input device name or index.",
+    )
+    @click.option(
+        "--sample-rate",
+        type=int,
+        default=44_100,
+        show_default=True,
+        help="Sample rate used for capture.",
+    )
+    @click.option(
+        "--block-size",
+        type=int,
+        default=1024,
+        show_default=True,
+        help="Frames per audio block.",
+    )
+    @click.option(
+        "--threshold-multiplier",
+        type=float,
+        default=6.0,
+        show_default=True,
+        help="How far above the ambient noise the peak must be to count as a clap.",
+    )
+    @click.option(
+        "--min-absolute-peak",
+        type=float,
+        default=0.04,
+        show_default=True,
+        help="Hard minimum peak amplitude needed to count as a clap.",
+    )
+    @click.option(
+        "--double-window",
+        nargs=2,
+        type=float,
+        metavar="MIN MAX",
+        default=(0.16, 0.65),
+        show_default=True,
+        help="Acceptable gap (seconds) between claps that forms a double clap.",
+    )
+    @click.option(
+        "--warmup",
+        type=float,
+        default=0.3,
+        show_default=True,
+        help="Seconds to learn the room noise floor before detecting claps.",
+    )
+    @click.option(
+        "--clap-cooldown",
+        type=float,
+        default=0.12,
+        show_default=True,
+        help="Minimum seconds between individual clap detections.",
+    )
+    def _cli(
+        command: tuple[str, ...],
+        device: Optional[str],
+        sample_rate: int,
+        block_size: int,
+        threshold_multiplier: float,
+        min_absolute_peak: float,
+        double_window: tuple[float, float],
+        warmup: float,
+        clap_cooldown: float,
+    ) -> None:
+        """Entry point for the clapper CLI."""
+        listener(
+            CliOptions(
+                command=list(command),
+                device=device,
+                sample_rate=sample_rate,
+                block_size=block_size,
+                threshold_multiplier=threshold_multiplier,
+                min_absolute_peak=min_absolute_peak,
+                double_window=double_window,
+                warmup=warmup,
+                clap_cooldown=clap_cooldown,
+            )
+        )
+
+    return _cli
+
+
+cli = make_cli()
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     cli.main(args=list(argv) if argv is not None else None, prog_name="clapper")
