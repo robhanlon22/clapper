@@ -17,6 +17,16 @@ repos:
         entry: taplo fmt
         language: system
         types: [toml]
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+      - id: shfmt
+        name: shfmt
+        entry: shfmt -w
+        language: system
+        types: [shell]
       - id: ruff-check
         name: ruff check
         entry: ruff check --fix
@@ -32,13 +42,9 @@ repos:
         entry: mypy
         language: system
         types: [python]
-      - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
+      - id: pytest
+        name: pytest
+        entry: pytest
         language: system
-        types: [shell]
-      - id: shfmt
-        name: shfmt
-        entry: shfmt -w
-        language: system
-        types: [shell]
+        always_run: true
+        pass_filenames: false
