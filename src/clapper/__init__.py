@@ -272,6 +272,9 @@ CONTEXT_SETTINGS = {
 }
 
 
+default_config = DetectorConfig()
+
+
 def make_cli(
     listener: Callable[[CliOptions], None] = listen_and_toggle,
 ) -> click.Command:
@@ -290,28 +293,28 @@ def make_cli(
     @click.option(
         "--sample-rate",
         type=int,
-        default=44_100,
+        default=default_config.sample_rate,
         show_default=True,
         help="Sample rate used for capture.",
     )
     @click.option(
         "--block-size",
         type=int,
-        default=1024,
+        default=default_config.block_size,
         show_default=True,
         help="Frames per audio block.",
     )
     @click.option(
         "--threshold-multiplier",
         type=float,
-        default=6.0,
+        default=default_config.threshold_multiplier,
         show_default=True,
         help="How far above the ambient noise the peak must be to count as a clap.",
     )
     @click.option(
         "--min-absolute-peak",
         type=float,
-        default=0.04,
+        default=default_config.min_absolute_peak,
         show_default=True,
         help="Hard minimum peak amplitude needed to count as a clap.",
     )
@@ -320,21 +323,21 @@ def make_cli(
         nargs=2,
         type=float,
         metavar="MIN MAX",
-        default=(0.16, 0.65),
+        default=(default_config.double_clap_min, default_config.double_clap_max),
         show_default=True,
         help="Acceptable gap (seconds) between claps that forms a double clap.",
     )
     @click.option(
         "--warmup",
         type=float,
-        default=0.3,
+        default=default_config.warmup_seconds,
         show_default=True,
         help="Seconds to learn the room noise floor before detecting claps.",
     )
     @click.option(
         "--clap-cooldown",
         type=float,
-        default=0.12,
+        default=default_config.min_clap_interval,
         show_default=True,
         help="Minimum seconds between individual clap detections.",
     )

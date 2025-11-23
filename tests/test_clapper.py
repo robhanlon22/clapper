@@ -16,6 +16,7 @@ from clapper import (
     DoubleClapDetector,
     ProcessToggler,
     build_detector_config,
+    default_config,
     listen_and_toggle,
     make_cli,
 )
@@ -57,13 +58,13 @@ def test_build_detector_config_validates_window() -> None:
     args = CliOptions(
         command=["echo"],
         device=None,
-        sample_rate=44_100,
-        block_size=1024,
-        threshold_multiplier=6.0,
-        min_absolute_peak=0.04,
+        sample_rate=default_config.sample_rate,
+        block_size=default_config.block_size,
+        threshold_multiplier=default_config.threshold_multiplier,
+        min_absolute_peak=default_config.min_absolute_peak,
         double_window=(0.5, 0.2),
-        warmup=0.3,
-        clap_cooldown=0.12,
+        warmup=default_config.warmup_seconds,
+        clap_cooldown=default_config.min_clap_interval,
     )
     with pytest.raises(SystemExit):
         build_detector_config(args)
@@ -113,13 +114,16 @@ def test_listen_and_toggle_processes_double_event() -> None:
         CliOptions(
             command=["echo", "hi"],
             device=None,
-            sample_rate=44_100,
-            block_size=1024,
-            threshold_multiplier=6.0,
-            min_absolute_peak=0.04,
-            double_window=(0.16, 0.65),
-            warmup=0.3,
-            clap_cooldown=0.12,
+            sample_rate=default_config.sample_rate,
+            block_size=default_config.block_size,
+            threshold_multiplier=default_config.threshold_multiplier,
+            min_absolute_peak=default_config.min_absolute_peak,
+            double_window=(
+                default_config.double_clap_min,
+                default_config.double_clap_max,
+            ),
+            warmup=default_config.warmup_seconds,
+            clap_cooldown=default_config.min_clap_interval,
         ),
         stream_factory=build_stream,
         time_fn=time_fn,
