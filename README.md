@@ -2,8 +2,8 @@ Clapper - double clap to start/stop a program.
 
 ## Quick start
 
-- Install deps (PortAudio is required; `brew install portaudio` on macOS if you
-  need it).
+- Install deps (PortAudio is required; on macOS run `brew install portaudio` or
+  `brew bundle` to apply the Brewfile).
 - Run: `uv run clapper -- <command to toggle>` Examples:
   - `uv run clapper -- python app.py`
   - `uv run clapper -- open -a \"Music\"`

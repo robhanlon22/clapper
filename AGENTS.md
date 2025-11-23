@@ -13,8 +13,9 @@
 ## Build, Test, and Development Commands
 
 - Setup runs automatically on directory enter via mise hooks (`mise install`
-  then `scripts/mise-postinstall.sh`, which installs pre-commit hooks, runs
-  `uv sync`, and executes `brew bundle` to pull PortAudio).
+  then `scripts/mise-postinstall.sh`, which installs pre-commit hooks and runs
+  `uv sync`). If you want the Homebrew bundle on macOS, run `brew bundle`
+  manually (PortAudio comes in via the Brewfile).
 - Run the app: `clapper -- <command>` (or `python -m clapper -- <command>`). The
   target command must be separated from clapper flags with `--`; otherwise the
   CLI exits with code 2 and prints a hint. Test tone:
