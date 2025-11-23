@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import os
 import queue
 import shlex
@@ -11,6 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence
 
+import click
 import numpy as np
 import sounddevice as sd
 from numpy.typing import NDArray
@@ -30,6 +30,19 @@ class DetectorConfig:
     double_clap_min: float = 0.16
     double_clap_max: float = 0.65
     noise_floor_halflife: float = 2.0
+
+
+@dataclass
+class CliOptions:
+    command: Sequence[str]
+    device: Optional[str]
+    sample_rate: int
+    block_size: int
+    threshold_multiplier: float
+    min_absolute_peak: float
+    double_window: tuple[float, float]
+    warmup: float
+    clap_cooldown: float
 
 
 class DoubleClapDetector:
@@ -150,61 +163,7 @@ class ProcessToggler:
         return True
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="clapper",
-        description="Toggle a program on/off with a double clap.",
-    )
-    parser.add_argument(
-        "command",
-        nargs=argparse.REMAINDER,
-        help="Program (and args) to run. Prefix with -- to pass flags, e.g. clapper -- python app.py",
-    )
-    parser.add_argument(
-        "--device", type=str, default=None, help="Audio input device name or index."
-    )
-    parser.add_argument(
-        "--sample-rate", type=int, default=44_100, help="Sample rate used for capture."
-    )
-    parser.add_argument(
-        "--block-size", type=int, default=1024, help="Frames per audio block."
-    )
-    parser.add_argument(
-        "--threshold-multiplier",
-        type=float,
-        default=6.0,
-        help="How far above the ambient noise the peak must be to count as a clap.",
-    )
-    parser.add_argument(
-        "--min-absolute-peak",
-        type=float,
-        default=0.04,
-        help="Hard minimum peak amplitude needed to count as a clap.",
-    )
-    parser.add_argument(
-        "--double-window",
-        type=float,
-        nargs=2,
-        metavar=("MIN", "MAX"),
-        default=(0.16, 0.65),
-        help="Acceptable gap (seconds) between claps that forms a double clap.",
-    )
-    parser.add_argument(
-        "--warmup",
-        type=float,
-        default=0.3,
-        help="Seconds to learn the room noise floor before detecting claps.",
-    )
-    parser.add_argument(
-        "--clap-cooldown",
-        type=float,
-        default=0.12,
-        help="Minimum seconds between individual clap detections.",
-    )
-    return parser.parse_args(argv)
-
-
-def build_detector_config(args: argparse.Namespace) -> DetectorConfig:
+def build_detector_config(args: CliOptions) -> DetectorConfig:
     double_min, double_max = args.double_window
     if double_min <= 0 or double_max <= 0 or double_min >= double_max:
         raise SystemExit(
@@ -226,7 +185,7 @@ def format_command(cmd: Iterable[str]) -> str:
     return " ".join(shlex.quote(part) for part in cmd)
 
 
-def listen_and_toggle(args: argparse.Namespace) -> None:
+def listen_and_toggle(args: CliOptions) -> None:
     if not args.command:
         print(
             "No command specified. Example: clapper -- python app.py", file=sys.stderr
@@ -290,6 +249,101 @@ def listen_and_toggle(args: argparse.Namespace) -> None:
         toggler.stop()
 
 
+CONTEXT_SETTINGS = {
+    "help_option_names": ["-h", "--help"],
+    # Do not parse options after the command positional; forward them to the child.
+    "allow_interspersed_args": False,
+}
+
+
+@click.command(
+    context_settings=CONTEXT_SETTINGS,
+    help="Toggle a program on/off with a double clap.",
+)
+@click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
+@click.option(
+    "--device",
+    type=str,
+    default=None,
+    show_default="default input device",
+    help="Audio input device name or index.",
+)
+@click.option(
+    "--sample-rate",
+    type=int,
+    default=44_100,
+    show_default=True,
+    help="Sample rate used for capture.",
+)
+@click.option(
+    "--block-size",
+    type=int,
+    default=1024,
+    show_default=True,
+    help="Frames per audio block.",
+)
+@click.option(
+    "--threshold-multiplier",
+    type=float,
+    default=6.0,
+    show_default=True,
+    help="How far above the ambient noise the peak must be to count as a clap.",
+)
+@click.option(
+    "--min-absolute-peak",
+    type=float,
+    default=0.04,
+    show_default=True,
+    help="Hard minimum peak amplitude needed to count as a clap.",
+)
+@click.option(
+    "--double-window",
+    nargs=2,
+    type=float,
+    metavar="MIN MAX",
+    default=(0.16, 0.65),
+    show_default=True,
+    help="Acceptable gap (seconds) between claps that forms a double clap.",
+)
+@click.option(
+    "--warmup",
+    type=float,
+    default=0.3,
+    show_default=True,
+    help="Seconds to learn the room noise floor before detecting claps.",
+)
+@click.option(
+    "--clap-cooldown",
+    type=float,
+    default=0.12,
+    show_default=True,
+    help="Minimum seconds between individual clap detections.",
+)
+def cli(
+    command: tuple[str, ...],
+    device: Optional[str],
+    sample_rate: int,
+    block_size: int,
+    threshold_multiplier: float,
+    min_absolute_peak: float,
+    double_window: tuple[float, float],
+    warmup: float,
+    clap_cooldown: float,
+) -> None:
+    """Entry point for the clapper CLI."""
+    options = CliOptions(
+        command=list(command),
+        device=device,
+        sample_rate=sample_rate,
+        block_size=block_size,
+        threshold_multiplier=threshold_multiplier,
+        min_absolute_peak=min_absolute_peak,
+        double_window=double_window,
+        warmup=warmup,
+        clap_cooldown=clap_cooldown,
+    )
+    listen_and_toggle(options)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
-    listen_and_toggle(args)
+    cli.main(args=list(argv) if argv is not None else None, prog_name="clapper")
