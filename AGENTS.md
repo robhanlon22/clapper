@@ -15,9 +15,12 @@
 - Setup runs automatically on directory enter via mise hooks (`mise install`
   then `scripts/mise-postinstall.sh`, which installs pre-commit hooks, runs
   `uv sync`, and executes `brew bundle` to pull PortAudio).
-- Run the app: `clapper -- <command>` (or `python -m clapper -- <command>`).
-  Test tone: `python -m clapper.test_tone --freq 880 --duration 0.5 --loop`.
-- Lint/format: `ruff check` and `ruff format`.
+- Run the app: `clapper -- <command>` (or `python -m clapper -- <command>`). The
+  target command must be separated from clapper flags with `--`; otherwise the
+  CLI exits with code 2 and prints a hint. Test tone:
+  `python -m clapper.test_tone --freq 880 --duration 0.5 --loop`.
+- Lint/format: `ruff check` and `ruff format` (run manually if you want, but the
+  pre-commit hook will handle them on commit).
 - Type check: `mypy`.
 - Test suite: `pytest`.
 
@@ -50,8 +53,8 @@
   tuning to detection parameters; attach screenshots or logs if CLI output
   changed.
 - Commit hook already runs pre-commit (ruff, pytest, mypy); rerun
-  `pre-commit run --all-files` only if you want to reproduce hook output before
-  pushing.
+  `pre-commit run --all-files` only if you want to reproduce hook output—no need
+  to run ruff/mypy/pytest manually before committing unless you prefer.
 
 ## Environment & Operational Tips
 
