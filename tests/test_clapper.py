@@ -13,19 +13,10 @@ import sounddevice as sd
 from click.testing import CliRunner
 from pydantic import ValidationError
 
-from clapper import (
-    CliOptions,
-    DoubleClapDetector,
-    ProcessToggler,
-    build_audio_callback,
-    build_detector_config,
-    cli,
-    default_config,
-    listen_and_toggle,
-    make_cli,
-    main as clapper_main,
-    process_event_loop,
-)
+from clapper.cli import CliOptions, cli, make_cli, main as clapper_main
+from clapper.detection import DoubleClapDetector, build_detector_config, default_config
+from clapper.events import build_audio_callback, listen_and_toggle, process_event_loop
+from clapper.process import ProcessToggler
 
 
 def _make_stream(callbacks: Iterable[Callable[[], None]]) -> mock.MagicMock:
