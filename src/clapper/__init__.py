@@ -7,6 +7,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable, ContextManager, Iterable, Optional, Sequence
 
@@ -259,6 +260,7 @@ def listen_and_toggle(
     config = build_detector_config(args)
     detector = DoubleClapDetector(config, now=time_fn())
     events: queue.SimpleQueue[str] = event_queue or queue.SimpleQueue()
+    stop_event = threading.Event()
     toggler = toggler_factory(args.command)
     audio_callback = build_audio_callback(detector, logger, events, time_fn)
 
@@ -272,6 +274,16 @@ def listen_and_toggle(
     logger.info("Clap twice to toggle. Ctrl+C to quit.")
 
     processed = 0
+    stop_sent = False
+
+    def signal_stop() -> None:
+        nonlocal stop_sent
+        if stop_sent:
+            return
+        stop_sent = True
+        stop_event.set()
+        events.put("stop")
+
     try:
         with stream_factory(
             channels=1,
@@ -289,10 +301,22 @@ def listen_and_toggle(
                 poll_timeout=poll_timeout,
                 max_events=max_events,
                 processed=processed,
+                stop_event=stop_event,
             )
     except KeyboardInterrupt:
-        pass
+        signal_stop()
     finally:
+        signal_stop()
+        processed = process_event_loop(
+            events=events,
+            toggler=toggler,
+            logger=logger,
+            command=args.command,
+            poll_timeout=poll_timeout,
+            max_events=max_events,
+            processed=processed,
+            stop_event=stop_event,
+        )
         toggler.stop()
 
 
@@ -329,12 +353,21 @@ def process_event_loop(
     poll_timeout: float,
     max_events: Optional[int],
     processed: int,
+    stop_event: Optional[threading.Event] = None,
 ) -> int:
     while True:
+        if stop_event is not None and stop_event.is_set() and events.empty():
+            break
         try:
             event = events.get(timeout=poll_timeout)
         except queue.Empty:
+            if stop_event is not None and stop_event.is_set():
+                break
             continue
+        if event == "stop":
+            if stop_event is not None:
+                stop_event.set()
+            break
         if event == "double":
             starting = toggler.toggle()
             state = "started" if starting else "stopped"
