@@ -5,6 +5,8 @@ _.python.venv = ".venv"
 pre-commit = "latest"
 prettier = "latest"
 python = "latest"
+shellcheck = "latest"
+shfmt = "latest"
 uv = "latest"
 
 [settings]
@@ -13,4 +15,4 @@ experimental = true
 
 [hooks]
 enter = ["mise install"]
-postinstall = ["pre-commit install", "brew bundle", "uv sync"]
+postinstall = ["scripts/mise-postinstall.sh"]
