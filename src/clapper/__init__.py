@@ -1,2 +1,295 @@
-def main() -> None:
-    print("Hello from clapper!")
+from __future__ import annotations
+
+import argparse
+import os
+import queue
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from typing import Any, Iterable, Optional, Sequence
+
+import numpy as np
+import sounddevice as sd
+from numpy.typing import NDArray
+
+
+# The detector is intentionally simple: track the noise floor, look for peaks
+# that jump above it, and treat two qualifying peaks in close succession as a
+# double clap.
+@dataclass
+class DetectorConfig:
+    sample_rate: int = 44_100
+    block_size: int = 1024
+    warmup_seconds: float = 0.3
+    threshold_multiplier: float = 6.0
+    min_absolute_peak: float = 0.04
+    min_clap_interval: float = 0.12
+    double_clap_min: float = 0.16
+    double_clap_max: float = 0.65
+    noise_floor_halflife: float = 2.0
+
+
+class DoubleClapDetector:
+    def __init__(self, config: DetectorConfig, now: float) -> None:
+        self.config = config
+        self.noise_floor = config.min_absolute_peak
+        self.last_clap_at = -1e9
+        self.pending_first_clap: Optional[float] = None
+        self.ready_at = now + config.warmup_seconds
+
+    def _update_noise_floor(self, energy: float, duration: float) -> None:
+        halflife = self.config.noise_floor_halflife
+        if halflife <= 0:
+            return
+        # Exponential decay toward the most recent block's energy.
+        alpha = 1.0 - np.exp(-duration / halflife)
+        self.noise_floor = (1.0 - alpha) * self.noise_floor + alpha * energy
+
+    def process_block(self, samples: NDArray[np.float32], now: float) -> bool:
+        """Return True when a double clap is recognized."""
+        if samples.size == 0:
+            return False
+        duration = samples.size / float(self.config.sample_rate)
+        rms = float(np.sqrt(np.mean(np.square(samples), dtype=np.float64)))
+        peak = float(np.max(np.abs(samples)))
+        self._update_noise_floor(rms, duration)
+
+        if now < self.ready_at:
+            return False
+
+        threshold = max(
+            self.config.min_absolute_peak,
+            self.noise_floor * self.config.threshold_multiplier,
+        )
+        is_clap = (
+            peak >= threshold
+            and (now - self.last_clap_at) >= self.config.min_clap_interval
+        )
+        if not is_clap:
+            return False
+
+        self.last_clap_at = now
+        if self.pending_first_clap is None:
+            self.pending_first_clap = now
+            return False
+
+        delta = now - self.pending_first_clap
+        if self.config.double_clap_min <= delta <= self.config.double_clap_max:
+            self.pending_first_clap = None
+            return True
+
+        # Treat this clap as a fresh first clap when the gap is too wide.
+        self.pending_first_clap = now
+        return False
+
+
+class ProcessToggler:
+    def __init__(self, command: Sequence[str]) -> None:
+        if not command:
+            raise ValueError("ProcessToggler requires a non-empty command.")
+        self.command = list(command)
+        self.process: Optional[subprocess.Popen[bytes]] = None
+
+    def is_running(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def start(self) -> None:
+        if self.is_running():
+            return
+        creationflags = 0
+        start_new_session = False
+        if os.name == "nt":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+        else:
+            start_new_session = True
+
+        self.process = subprocess.Popen(
+            self.command,
+            stdout=None,
+            stderr=None,
+            stdin=None,
+            start_new_session=start_new_session,
+            creationflags=creationflags,
+        )
+
+    def stop(self, timeout: float = 5.0) -> None:
+        if not self.is_running() or self.process is None:
+            self.process = None
+            return
+
+        proc = self.process
+        try:
+            if os.name == "nt":
+                proc.terminate()
+            else:
+                os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            self.process = None
+            return
+
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+        finally:
+            self.process = None
+
+    def toggle(self) -> bool:
+        """Toggle the process; returns True when starting, False when stopping."""
+        if self.is_running():
+            self.stop()
+            return False
+        self.start()
+        return True
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="clapper",
+        description="Toggle a program on/off with a double clap.",
+    )
+    parser.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="Program (and args) to run. Prefix with -- to pass flags, e.g. clapper -- python app.py",
+    )
+    parser.add_argument(
+        "--device", type=str, default=None, help="Audio input device name or index."
+    )
+    parser.add_argument(
+        "--sample-rate", type=int, default=44_100, help="Sample rate used for capture."
+    )
+    parser.add_argument(
+        "--block-size", type=int, default=1024, help="Frames per audio block."
+    )
+    parser.add_argument(
+        "--threshold-multiplier",
+        type=float,
+        default=6.0,
+        help="How far above the ambient noise the peak must be to count as a clap.",
+    )
+    parser.add_argument(
+        "--min-absolute-peak",
+        type=float,
+        default=0.04,
+        help="Hard minimum peak amplitude needed to count as a clap.",
+    )
+    parser.add_argument(
+        "--double-window",
+        type=float,
+        nargs=2,
+        metavar=("MIN", "MAX"),
+        default=(0.16, 0.65),
+        help="Acceptable gap (seconds) between claps that forms a double clap.",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=float,
+        default=0.3,
+        help="Seconds to learn the room noise floor before detecting claps.",
+    )
+    parser.add_argument(
+        "--clap-cooldown",
+        type=float,
+        default=0.12,
+        help="Minimum seconds between individual clap detections.",
+    )
+    return parser.parse_args(argv)
+
+
+def build_detector_config(args: argparse.Namespace) -> DetectorConfig:
+    double_min, double_max = args.double_window
+    if double_min <= 0 or double_max <= 0 or double_min >= double_max:
+        raise SystemExit(
+            "double-window values must be positive and MIN must be less than MAX."
+        )
+    return DetectorConfig(
+        sample_rate=int(args.sample_rate),
+        block_size=int(args.block_size),
+        warmup_seconds=float(args.warmup),
+        threshold_multiplier=float(args.threshold_multiplier),
+        min_absolute_peak=float(args.min_absolute_peak),
+        min_clap_interval=float(args.clap_cooldown),
+        double_clap_min=float(double_min),
+        double_clap_max=float(double_max),
+    )
+
+
+def format_command(cmd: Iterable[str]) -> str:
+    return " ".join(shlex.quote(part) for part in cmd)
+
+
+def listen_and_toggle(args: argparse.Namespace) -> None:
+    if not args.command:
+        print(
+            "No command specified. Example: clapper -- python app.py", file=sys.stderr
+        )
+        sys.exit(1)
+
+    config = build_detector_config(args)
+    detector = DoubleClapDetector(config, now=time.monotonic())
+    events: queue.SimpleQueue[str] = queue.SimpleQueue()
+    toggler = ProcessToggler(args.command)
+
+    def audio_callback(
+        indata: NDArray[np.float32],
+        frames: int,
+        time_info: Any,
+        status: sd.CallbackFlags,
+    ) -> None:
+        if status:
+            # Stash the status string to stderr so the loop can continue listening.
+            print(f"[clapper] Audio status: {status}", file=sys.stderr)
+        now = time.monotonic()
+        # Use the first channel only; mono is sufficient for clap detection.
+        samples: NDArray[np.float32] = np.asarray(indata[:, 0], dtype=np.float32)
+        if detector.process_block(samples, now):
+            events.put("double")
+
+    device = args.device
+    print(
+        f"Listening for double claps (device={device or 'default'}, "
+        f"double window={config.double_clap_min:.2f}-{config.double_clap_max:.2f}s, "
+        f"threshold x{config.threshold_multiplier:g}).",
+        file=sys.stderr,
+    )
+    print(f"Target command: {format_command(args.command)}", file=sys.stderr)
+    print("Clap twice to toggle. Ctrl+C to quit.", file=sys.stderr)
+
+    try:
+        with sd.InputStream(
+            channels=1,
+            callback=audio_callback,
+            samplerate=config.sample_rate,
+            blocksize=config.block_size,
+            device=device,
+            dtype="float32",
+        ):
+            while True:
+                try:
+                    event = events.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if event == "double":
+                    starting = toggler.toggle()
+                    state = "started" if starting else "stopped"
+                    print(
+                        f"[clapper] Double clap detected, {state} {format_command(args.command)}",
+                        file=sys.stderr,
+                    )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        toggler.stop()
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    listen_and_toggle(args)

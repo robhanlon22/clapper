@@ -1,5 +1,4 @@
 [env]
-CODEX_HOME = "{{config_root}}/.codex"
 _.python.venv = ".venv"
 
 [tools]
@@ -14,4 +13,4 @@ experimental = true
 
 [hooks]
 enter = ["mise install"]
-postinstall = ["pre-commit install", "uv sync"]
+postinstall = ["pre-commit install", "brew bundle", "uv sync"]

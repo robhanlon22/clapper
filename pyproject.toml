@@ -7,7 +7,7 @@ authors = [
   { name = "Rob Hanlon", email = "69870+robhanlon22@users.noreply.github.com" },
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = ["numpy>=2.3.5", "sounddevice>=0.5.3"]
 
 [project.scripts]
 clapper = "clapper:main"
@@ -17,7 +17,11 @@ requires = ["uv_build>=0.9.8,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = [
-    "mypy>=1.18.2",
-    "ruff>=0.14.6",
-]
+dev = ["mypy>=1.18.2", "ruff>=0.14.6"]
+
+[tool.mypy]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["sounddevice", "sounddevice.*"]
+ignore_missing_imports = true
