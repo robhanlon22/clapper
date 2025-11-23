@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import queue
-from types import TracebackType
-from typing import Callable, Iterable, List, Literal, Sequence, cast
+from typing import Callable, Iterable, Sequence, cast
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -20,35 +20,26 @@ from clapper import (
 )
 
 
-class FakeStream:
-    def __init__(self, callbacks: Iterable[Callable[[], None]]) -> None:
-        self._callbacks = list(callbacks)
+def _make_stream(callbacks: Iterable[Callable[[], None]]) -> mock.MagicMock:
+    """Create a mock InputStream context manager that runs callbacks on enter."""
+    stream = mock.MagicMock()
 
-    def __enter__(self) -> "FakeStream":
-        for callback in self._callbacks:
-            callback()
-        return self
+    def _enter() -> mock.Mock:
+        for cb in callbacks:
+            cb()
+        return stream
 
-    def __exit__(
-        self,
+    stream.__enter__.side_effect = _enter
+
+    def _exit(
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> Literal[False]:
+        tb: object,
+    ) -> bool:
         return False
 
-
-class FakeToggler(ProcessToggler):
-    def __init__(self, command: Sequence[str]) -> None:
-        super().__init__(command)
-        self.calls: List[str] = []
-
-    def toggle(self) -> bool:
-        self.calls.append("toggle")
-        return True
-
-    def stop(self, timeout: float = 0.0) -> None:
-        self.calls.append("stop")
+    stream.__exit__.side_effect = _exit
+    return stream
 
 
 def test_double_clap_detector_detects_within_window() -> None:
@@ -78,7 +69,7 @@ def test_build_detector_config_validates_window() -> None:
 
 
 def test_cli_passes_flags_through_to_command() -> None:
-    received: List[Sequence[str]] = []
+    received: list[Sequence[str]] = []
 
     def fake_listener(opts: CliOptions) -> None:
         received.append(opts.command)
@@ -100,10 +91,13 @@ def test_listen_and_toggle_processes_double_event() -> None:
     def time_fn() -> float:
         return next(time_values)
 
-    events = queue.SimpleQueue[str]()
-    toggler = FakeToggler(["echo", "hi"])
+    toggler_mock = mock.create_autospec(ProcessToggler, instance=True)
+    toggler_mock.toggle.side_effect = [True]  # first double event starts
 
-    def build_stream(**kwargs: object) -> FakeStream:
+    def toggler_factory(cmd: Sequence[str]) -> ProcessToggler:
+        return cast(ProcessToggler, toggler_mock)
+
+    def build_stream(**kwargs: object) -> mock.Mock:
         callback = cast(
             Callable[[np.ndarray, int, dict[str, object], sd.CallbackFlags], None],
             kwargs["callback"],
@@ -113,7 +107,7 @@ def test_listen_and_toggle_processes_double_event() -> None:
             data = np.ones((1024, 1), dtype=np.float32)
             callback(data, data.shape[0], {}, sd.CallbackFlags(0))
 
-        return FakeStream([fire, fire])
+        return _make_stream([fire, fire])
 
     listen_and_toggle(
         CliOptions(
@@ -129,9 +123,10 @@ def test_listen_and_toggle_processes_double_event() -> None:
         ),
         stream_factory=build_stream,
         time_fn=time_fn,
-        toggler_factory=lambda cmd: toggler,
-        event_queue=events,
+        toggler_factory=toggler_factory,
+        event_queue=queue.SimpleQueue(),
         max_events=1,
     )
 
-    assert toggler.calls == ["toggle", "stop"]
+    toggler_mock.toggle.assert_called_once()
+    toggler_mock.stop.assert_called_once()
