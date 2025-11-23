@@ -495,12 +495,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     args = list(argv) if argv is not None else sys.argv[1:]
 
+    separator_index = args.index("--") if "--" in args else None
+    help_args = args if separator_index is None else args[:separator_index]
+
     # Allow Click to handle help/usage when no arguments are provided.
-    if not args or any(arg in context_settings.help_option_names for arg in args):
+    if not args or any(arg in context_settings.help_option_names for arg in help_args):
         cli.main(args=args if argv is not None else None, prog_name="clapper")
         return
 
-    if "--" not in args:
+    if separator_index is None:
         click.echo(f"Error: {_SEPARATOR_ERROR}", err=True)
         sys.exit(2)
 
