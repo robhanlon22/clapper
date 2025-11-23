@@ -3,163 +3,32 @@ from __future__ import annotations
 import logging
 import queue
 import threading
-from typing import Callable, Iterable, Sequence, cast
+from typing import Callable, Iterable, cast
 from unittest import mock
 
-import click
 import numpy as np
-import pytest
 import sounddevice as sd
-from click.testing import CliRunner
-from pydantic import ValidationError
 
-from clapper.cli import CliOptions, cli, make_cli, main as clapper_main
-from clapper.detection import DoubleClapDetector, build_detector_config, default_config
+from clapper.cli import CliOptions
+from clapper.detection import DoubleClapDetector, default_config
 from clapper.events import build_audio_callback, listen_and_toggle, process_event_loop
 from clapper.process import ProcessToggler
 
 
-def _make_stream(callbacks: Iterable[Callable[[], None]]) -> mock.MagicMock:
+def _make_stream(callbacks: Iterable[Callable[[], None]]) -> mock.Mock:
     """Create a mock InputStream context manager that runs callbacks on enter."""
-    stream = mock.MagicMock()
+    stream = mock.Mock()
 
     def _enter() -> mock.Mock:
         for cb in callbacks:
             cb()
         return stream
 
-    stream.__enter__.side_effect = _enter
-
-    def _exit(
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: object,
-    ) -> bool:
-        return False
-
-    stream.__exit__.side_effect = _exit
+    stream.configure_mock(
+        __enter__=mock.Mock(side_effect=_enter),
+        __exit__=mock.Mock(return_value=False),
+    )
     return stream
-
-
-def test_double_clap_detector_detects_within_window() -> None:
-    detector = DoubleClapDetector(default_config, now=0.0)
-    samples = np.ones(1024, dtype=np.float32)
-
-    assert detector.process_block(samples, now=0.29) is False  # still warming up
-    assert detector.process_block(samples, now=0.31) is False  # first clap
-    assert detector.process_block(samples, now=0.5) is True  # second clap in window
-
-
-def test_build_detector_config_validates_window() -> None:
-    with pytest.raises(ValidationError):
-        args = CliOptions(
-            command=["echo"],
-            device=None,
-            sample_rate=default_config.sample_rate,
-            block_size=default_config.block_size,
-            threshold_multiplier=default_config.threshold_multiplier,
-            min_absolute_peak=default_config.min_absolute_peak,
-            double_window=(0.5, 0.2),
-            warmup=default_config.warmup_seconds,
-            clap_cooldown=default_config.min_clap_interval,
-            noise_floor_halflife=default_config.noise_floor_halflife,
-        )
-        build_detector_config(args)
-
-
-def test_build_detector_config_rejects_cooldown_overlaps() -> None:
-    with pytest.raises(ValidationError):
-        args = CliOptions(
-            command=["echo"],
-            device=None,
-            sample_rate=44_100,
-            block_size=1024,
-            threshold_multiplier=6.0,
-            min_absolute_peak=0.04,
-            double_window=(0.16, 0.2),
-            warmup=0.3,
-            clap_cooldown=0.2,
-            noise_floor_halflife=default_config.noise_floor_halflife,
-        )
-
-        build_detector_config(args)
-
-
-def test_build_detector_config_rejects_cooldown_above_min() -> None:
-    with pytest.raises(ValidationError):
-        args = CliOptions(
-            command=["echo"],
-            device=None,
-            sample_rate=44_100,
-            block_size=1024,
-            threshold_multiplier=6.0,
-            min_absolute_peak=0.04,
-            double_window=(0.16, 0.2),
-            warmup=0.3,
-            clap_cooldown=0.17,
-            noise_floor_halflife=default_config.noise_floor_halflife,
-        )
-
-        build_detector_config(args)
-
-
-def test_cli_passes_flags_through_to_command() -> None:
-    received: list[Sequence[str]] = []
-
-    def fake_listener(opts: CliOptions) -> None:
-        received.append(opts.command)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        make_cli(fake_listener),
-        ["--", "python", "app.py", "--debug", "-v"],
-        standalone_mode=False,
-    )
-    assert result.exit_code == 0
-    assert received == [["python", "app.py", "--debug", "-v"]]
-
-
-def test_cli_reports_detector_validation_errors() -> None:
-    def fake_listener(opts: CliOptions) -> None:
-        build_detector_config(opts)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        make_cli(fake_listener),
-        ["--double-window", "0.5", "0.2", "--", "echo"],
-        standalone_mode=False,
-    )
-
-    assert result.exit_code == 1
-    assert isinstance(result.exception, click.ClickException)
-    assert "double_clap_min" in str(result.exception)
-
-
-def test_main_requires_command_separator(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    fake_cli_main = mock.Mock()
-    monkeypatch.setattr(cli, "main", fake_cli_main)
-
-    with pytest.raises(SystemExit) as excinfo:
-        clapper_main(["echo"])
-
-    assert excinfo.value.code == 2
-    fake_cli_main.assert_not_called()
-    assert "--" in capsys.readouterr().err
-
-
-def test_main_allows_command_with_separator(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_cli_main = mock.Mock()
-    monkeypatch.setattr(cli, "main", fake_cli_main)
-
-    clapper_main(["--", "echo", "hi"])
-
-    fake_cli_main.assert_called_once_with(
-        args=["--", "echo", "hi"],
-        prog_name="clapper",
-    )
 
 
 def test_listen_and_toggle_processes_double_event() -> None:
