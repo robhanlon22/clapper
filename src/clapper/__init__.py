@@ -115,7 +115,7 @@ class ProcessToggler:
         creationflags = 0
         start_new_session = False
         if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         else:
             start_new_session = True
 
