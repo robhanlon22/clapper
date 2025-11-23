@@ -351,14 +351,14 @@ def process_event_loop(
 
 
 class ContextSettings(BaseModel):
-    help_option_names: list[str]
+    help_option_names: Iterable[str]
     allow_interspersed_args: bool
 
     model_config = ConfigDict(frozen=True)
 
 
 context_settings = ContextSettings(
-    help_option_names=["-h", "--help"],
+    help_option_names={"-h", "--help"},
     allow_interspersed_args=False,
 )
 
@@ -496,7 +496,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = list(argv) if argv is not None else sys.argv[1:]
 
     # Allow Click to handle help/usage when no arguments are provided.
-    if not args or any(arg in {"-h", "--help"} for arg in args):
+    if not args or any(arg in context_settings.help_option_names for arg in args):
         cli.main(args=args if argv is not None else None, prog_name="clapper")
         return
 
