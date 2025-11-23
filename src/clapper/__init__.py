@@ -8,33 +8,78 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from typing import Any, Callable, ContextManager, Iterable, Optional, Sequence
 
 import click
 import numpy as np
 import sounddevice as sd
 from numpy.typing import NDArray
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 
 # The detector is intentionally simple: track the noise floor, look for peaks
 # that jump above it, and treat two qualifying peaks in close succession as a
 # double clap.
-@dataclass
-class DetectorConfig:
-    sample_rate: int = 44_100
-    block_size: int = 1024
-    warmup_seconds: float = 0.3
-    threshold_multiplier: float = 6.0
-    min_absolute_peak: float = 0.04
-    min_clap_interval: float = 0.12
-    double_clap_min: float = 0.16
-    double_clap_max: float = 0.65
-    noise_floor_halflife: float = 2.0
 
 
-@dataclass
-class CliOptions:
+class DetectorConfig(BaseModel):
+    sample_rate: int
+    block_size: int
+    warmup_seconds: float
+    threshold_multiplier: float
+    min_absolute_peak: float
+    double_clap_min: float
+    double_clap_max: float
+    min_clap_interval: float
+    noise_floor_halflife: float
+
+    model_config = ConfigDict(frozen=True)
+
+    @field_validator("double_clap_min", "double_clap_max", "min_clap_interval")
+    @classmethod
+    def validate_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("Values must be positive.")
+        return float(value)
+
+    @field_validator("double_clap_max", mode="after")
+    @classmethod
+    def validate_double_clap_max(
+        cls,
+        value: float,
+        info: ValidationInfo,
+    ) -> float:
+        double_min = info.data.get("double_clap_min")
+        if double_min is not None and value <= double_min:
+            raise ValueError("double_clap_max must be greater than double_clap_min.")
+        return value
+
+    @field_validator("min_clap_interval", mode="after")
+    @classmethod
+    def validate_min_clap_interval(
+        cls,
+        value: float,
+        info: ValidationInfo,
+    ) -> float:
+        double_min = info.data.get("double_clap_min")
+        double_max = info.data.get("double_clap_max")
+        if double_max is not None and value >= double_max:
+            raise ValueError("min_clap_interval must be less than double_clap_max.")
+        if double_min is not None and value > double_min:
+            raise ValueError(
+                "min_clap_interval should not exceed double_clap_min "
+                "or double claps become impossible."
+            )
+        return value
+
+
+class CliOptions(BaseModel):
     command: Sequence[str]
     device: Optional[str]
     sample_rate: int
@@ -44,6 +89,16 @@ class CliOptions:
     double_window: tuple[float, float]
     warmup: float
     clap_cooldown: float
+    noise_floor_halflife: float
+
+    model_config = ConfigDict(frozen=True)
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: Sequence[str]) -> Sequence[str]:
+        if not value:
+            raise ValueError("A command is required.")
+        return value
 
 
 LOGGER = logging.getLogger(__name__)
@@ -169,27 +224,16 @@ class ProcessToggler:
 
 def build_detector_config(args: CliOptions) -> DetectorConfig:
     double_min, double_max = args.double_window
-    if double_min <= 0 or double_max <= 0 or double_min >= double_max:
-        raise SystemExit(
-            "double-window values must be positive and MIN must be less than MAX."
-        )
-    if args.clap_cooldown >= double_max:
-        raise SystemExit(
-            "clap-cooldown must be less than the double-window MAX to allow a second clap."
-        )
-    if args.clap_cooldown > double_min:
-        raise SystemExit(
-            "clap-cooldown should not exceed the double-window MIN or double claps become impossible."
-        )
     return DetectorConfig(
-        sample_rate=int(args.sample_rate),
-        block_size=int(args.block_size),
-        warmup_seconds=float(args.warmup),
-        threshold_multiplier=float(args.threshold_multiplier),
-        min_absolute_peak=float(args.min_absolute_peak),
-        min_clap_interval=float(args.clap_cooldown),
-        double_clap_min=float(double_min),
-        double_clap_max=float(double_max),
+        sample_rate=args.sample_rate,
+        block_size=args.block_size,
+        warmup_seconds=args.warmup,
+        threshold_multiplier=args.threshold_multiplier,
+        min_absolute_peak=args.min_absolute_peak,
+        min_clap_interval=args.clap_cooldown,
+        double_clap_min=double_min,
+        double_clap_max=double_max,
+        noise_floor_halflife=args.noise_floor_halflife,
     )
 
 
@@ -306,21 +350,36 @@ def process_event_loop(
     return processed
 
 
-CONTEXT_SETTINGS = {
-    "help_option_names": ["-h", "--help"],
-    # Do not parse options after the command positional; forward them to the child.
-    "allow_interspersed_args": False,
-}
+class ContextSettings(BaseModel):
+    help_option_names: list[str]
+    allow_interspersed_args: bool
+
+    model_config = ConfigDict(frozen=True)
 
 
-default_config = DetectorConfig()
+context_settings = ContextSettings(
+    help_option_names=["-h", "--help"],
+    allow_interspersed_args=False,
+)
+
+default_config = DetectorConfig(
+    sample_rate=44_100,
+    block_size=1024,
+    warmup_seconds=0.3,
+    threshold_multiplier=6.0,
+    min_absolute_peak=0.04,
+    double_clap_min=0.16,
+    double_clap_max=0.65,
+    min_clap_interval=0.12,
+    noise_floor_halflife=2.0,
+)
 
 
 def make_cli(
     listener: Callable[[CliOptions], None] = listen_and_toggle,
 ) -> click.Command:
     @click.command(
-        context_settings=CONTEXT_SETTINGS,
+        context_settings=context_settings.model_dump(),
         help="Toggle a program on/off with a double clap.",
     )
     @click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
@@ -382,6 +441,13 @@ def make_cli(
         show_default=True,
         help="Minimum seconds between individual clap detections.",
     )
+    @click.option(
+        "--noise-floor-halflife",
+        type=float,
+        default=default_config.noise_floor_halflife,
+        show_default=True,
+        help="Seconds for the noise floor estimate to halve.",
+    )
     def _cli(
         command: tuple[str, ...],
         device: Optional[str],
@@ -392,10 +458,11 @@ def make_cli(
         double_window: tuple[float, float],
         warmup: float,
         clap_cooldown: float,
+        noise_floor_halflife: float,
     ) -> None:
         """Entry point for the clapper CLI."""
-        listener(
-            CliOptions(
+        try:
+            options = CliOptions(
                 command=list(command),
                 device=device,
                 sample_rate=sample_rate,
@@ -405,8 +472,12 @@ def make_cli(
                 double_window=double_window,
                 warmup=warmup,
                 clap_cooldown=clap_cooldown,
+                noise_floor_halflife=noise_floor_halflife,
             )
-        )
+        except ValidationError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        listener(options)
 
     return _cli
 
