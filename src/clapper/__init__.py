@@ -351,14 +351,14 @@ def process_event_loop(
 
 
 class ContextSettings(BaseModel):
-    help_option_names: list[str]
+    help_option_names: Iterable[str]
     allow_interspersed_args: bool
 
     model_config = ConfigDict(frozen=True)
 
 
 context_settings = ContextSettings(
-    help_option_names=["-h", "--help"],
+    help_option_names={"-h", "--help"},
     allow_interspersed_args=False,
 )
 
@@ -474,10 +474,9 @@ def make_cli(
                 clap_cooldown=clap_cooldown,
                 noise_floor_halflife=noise_floor_halflife,
             )
+            listener(options)
         except ValidationError as exc:
             raise click.ClickException(str(exc)) from exc
-
-        listener(options)
 
     return _cli
 
@@ -485,6 +484,24 @@ def make_cli(
 cli = make_cli()
 
 
+_SEPARATOR_ERROR = (
+    "Separate clapper options from the target command with '--'. "
+    "Example: clapper -- python app.py"
+)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    cli.main(args=list(argv) if argv is not None else None, prog_name="clapper")
+
+    args = list(argv) if argv is not None else sys.argv[1:]
+
+    # Allow Click to handle help/usage when no arguments are provided.
+    if not args or any(arg in context_settings.help_option_names for arg in args):
+        cli.main(args=args if argv is not None else None, prog_name="clapper")
+        return
+
+    if "--" not in args:
+        click.echo(f"Error: {_SEPARATOR_ERROR}", err=True)
+        sys.exit(2)
+
+    cli.main(args=args, prog_name="clapper")
