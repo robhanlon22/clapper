@@ -8,7 +8,7 @@ from .detection import (
     default_config,
 )
 from .events import build_audio_callback, listen_and_toggle, process_event_loop
-from .process import ProcessToggler
+from .process import ProcessToggler, format_command
 
 __all__ = [
     "CliOptions",
@@ -19,6 +19,7 @@ __all__ = [
     "build_detector_config",
     "cli",
     "default_config",
+    "format_command",
     "listen_and_toggle",
     "main",
     "make_cli",
