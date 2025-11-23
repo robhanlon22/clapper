@@ -6,15 +6,26 @@ from pydantic import ValidationError
 
 from clapper.cli import CliOptions
 from clapper.detection import DoubleClapDetector, build_detector_config, default_config
+from tests.audio_samples import clap_like, low_tone
 
 
 def test_double_clap_detector_detects_within_window() -> None:
     detector = DoubleClapDetector(default_config, now=0.0)
-    samples = np.ones(1024, dtype=np.float32)
+    samples = clap_like(default_config.block_size)
 
     assert detector.process_block(samples, now=0.29) is False  # still warming up
     assert detector.process_block(samples, now=0.31) is False  # first clap
     assert detector.process_block(samples, now=0.5) is True  # second clap in window
+
+
+def test_double_clap_detector_rejects_sustained_or_low_tone() -> None:
+    detector = DoubleClapDetector(default_config, now=0.0)
+
+    sustained = np.full(default_config.block_size, 0.5, dtype=np.float32)
+    assert detector.process_block(sustained, now=0.31) is False
+
+    bassy = low_tone(block_size=default_config.block_size)
+    assert detector.process_block(bassy, now=0.5) is False
 
 
 def test_build_detector_config_validates_window() -> None:

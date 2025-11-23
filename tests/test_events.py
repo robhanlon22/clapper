@@ -13,6 +13,7 @@ from clapper.cli import CliOptions
 from clapper.detection import DoubleClapDetector, default_config
 from clapper.events import build_audio_callback, listen_and_toggle, process_event_loop
 from clapper.process import ProcessToggler
+from tests.audio_samples import clap_like
 
 
 def _make_stream(callbacks: Iterable[Callable[[], None]]) -> mock.Mock:
@@ -48,7 +49,8 @@ def test_listen_and_toggle_processes_double_event() -> None:
         )
 
         def fire() -> None:
-            data = np.ones((1024, 1), dtype=np.float32)
+            samples = clap_like(default_config.block_size).reshape(-1, 1)
+            data = np.asarray(samples, dtype=np.float32)
             callback(data, data.shape[0], {}, sd.CallbackFlags(0))
 
         return _make_stream([fire, fire])
