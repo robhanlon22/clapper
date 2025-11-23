@@ -249,7 +249,11 @@ def listen_and_toggle(args: CliOptions) -> None:
         toggler.stop()
 
 
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+CONTEXT_SETTINGS = {
+    "help_option_names": ["-h", "--help"],
+    # Do not parse options after the command positional; forward them to the child.
+    "allow_interspersed_args": False,
+}
 
 
 @click.command(
