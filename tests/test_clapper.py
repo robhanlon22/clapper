@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import queue
 from typing import Callable, Iterable, Sequence, cast
 from unittest import mock
@@ -14,6 +15,7 @@ from clapper import (
     DetectorConfig,
     DoubleClapDetector,
     ProcessToggler,
+    RuntimeDeps,
     build_detector_config,
     listen_and_toggle,
     make_cli,
@@ -94,9 +96,6 @@ def test_listen_and_toggle_processes_double_event() -> None:
     toggler_mock = mock.create_autospec(ProcessToggler, instance=True)
     toggler_mock.toggle.side_effect = [True]  # first double event starts
 
-    def toggler_factory(cmd: Sequence[str]) -> ProcessToggler:
-        return cast(ProcessToggler, toggler_mock)
-
     def build_stream(**kwargs: object) -> mock.Mock:
         callback = cast(
             Callable[[np.ndarray, int, dict[str, object], sd.CallbackFlags], None],
@@ -108,6 +107,8 @@ def test_listen_and_toggle_processes_double_event() -> None:
             callback(data, data.shape[0], {}, sd.CallbackFlags(0))
 
         return _make_stream([fire, fire])
+
+    logger = mock.create_autospec(logging.Logger)
 
     listen_and_toggle(
         CliOptions(
@@ -121,11 +122,15 @@ def test_listen_and_toggle_processes_double_event() -> None:
             warmup=0.3,
             clap_cooldown=0.12,
         ),
-        stream_factory=build_stream,
-        time_fn=time_fn,
-        toggler_factory=toggler_factory,
-        event_queue=queue.SimpleQueue(),
-        max_events=1,
+        deps=RuntimeDeps(
+            stream_factory=build_stream,
+            time_fn=time_fn,
+            toggler_factory=lambda cmd: cast(ProcessToggler, toggler_mock),
+            event_queue=queue.SimpleQueue(),
+            poll_timeout=0.1,
+            max_events=1,
+            logger=logger,
+        ),
     )
 
     toggler_mock.toggle.assert_called_once()
