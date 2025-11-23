@@ -1,0 +1,17 @@
+[env]
+CODEX_HOME = "{{config_root}}/.codex"
+_.python.venv = ".venv"
+
+[tools]
+pre-commit = "latest"
+prettier = "latest"
+python = "latest"
+uv = "latest"
+
+[settings]
+auto_install = true
+experimental = true
+
+[hooks]
+enter = ["mise install"]
+postinstall = ["pre-commit install", "uv sync"]
