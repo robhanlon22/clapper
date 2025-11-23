@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import argparse
 import sys
 from typing import Optional, Sequence
 
-from numpy.typing import NDArray
-
+import click
 import numpy as np
 import sounddevice as sd
+from numpy.typing import NDArray
 
 
 def build_tone(
@@ -38,56 +37,89 @@ def build_tone(
     return tone
 
 
-def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Play a test tone.")
-    parser.add_argument(
-        "--freq", type=float, default=440.0, help="Frequency in Hz (default: 440)."
-    )
-    parser.add_argument(
-        "--duration", type=float, default=1.0, help="Tone duration in seconds."
-    )
-    parser.add_argument(
-        "--level", type=float, default=0.2, help="Amplitude 0.0-1.0 (default: 0.2)."
-    )
-    parser.add_argument(
-        "--sample-rate", type=int, default=44_100, help="Sample rate in Hz."
-    )
-    parser.add_argument(
-        "--fade",
-        type=float,
-        default=0.01,
-        help="Seconds for fade-in/out to reduce clicks (default: 0.01).",
-    )
-    parser.add_argument(
-        "--loop", action="store_true", help="Repeat the tone until Ctrl+C."
-    )
-    return parser.parse_args(argv)
-
-
-def play_tone(args: argparse.Namespace) -> None:
+def play_tone(
+    freq: float,
+    duration: float,
+    sample_rate: int,
+    level: float,
+    fade: float,
+    loop: bool,
+) -> None:
     tone = build_tone(
-        frequency=args.freq,
-        duration=args.duration,
-        sample_rate=args.sample_rate,
-        level=args.level,
-        fade=args.fade,
+        frequency=freq,
+        duration=duration,
+        sample_rate=sample_rate,
+        level=level,
+        fade=fade,
     )
     try:
-        if args.loop:
+        if loop:
             print("Playing tone on loop. Press Ctrl+C to stop.", file=sys.stderr)
             while True:
-                sd.play(tone, args.sample_rate)
+                sd.play(tone, sample_rate)
                 sd.wait()
         else:
-            sd.play(tone, args.sample_rate)
+            sd.play(tone, sample_rate)
             sd.wait()
     except KeyboardInterrupt:
         pass
 
 
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+
+
+@click.command(context_settings=CONTEXT_SETTINGS, help="Play a simple test tone.")
+@click.option(
+    "--freq", type=float, default=440.0, show_default=True, help="Frequency in Hz."
+)
+@click.option(
+    "--duration",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Tone duration in seconds.",
+)
+@click.option(
+    "--level", type=float, default=0.2, show_default=True, help="Amplitude 0.0-1.0."
+)
+@click.option(
+    "--sample-rate",
+    type=int,
+    default=44_100,
+    show_default=True,
+    help="Sample rate in Hz.",
+)
+@click.option(
+    "--fade",
+    type=float,
+    default=0.01,
+    show_default=True,
+    help="Seconds for fade-in/out to reduce clicks.",
+)
+@click.option("--loop", is_flag=True, help="Repeat the tone until Ctrl+C.")
+def cli(
+    freq: float,
+    duration: float,
+    level: float,
+    sample_rate: int,
+    fade: float,
+    loop: bool,
+) -> None:
+    play_tone(
+        freq=freq,
+        duration=duration,
+        sample_rate=sample_rate,
+        level=level,
+        fade=fade,
+        loop=loop,
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
-    play_tone(args)
+    cli.main(
+        args=list(argv) if argv is not None else None,
+        prog_name="python -m clapper.test_tone",
+    )
 
 
 if __name__ == "__main__":
