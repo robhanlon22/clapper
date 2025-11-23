@@ -2,7 +2,6 @@
 _.python.venv = ".venv"
 
 [tools]
-pre-commit = "latest"
 prettier = "latest"
 python = "latest"
 shellcheck = "latest"
