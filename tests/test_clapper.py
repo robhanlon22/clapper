@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import threading
 from typing import Callable, Iterable, Sequence, cast
 from unittest import mock
 
@@ -261,3 +262,67 @@ def test_process_event_loop_toggles_and_logs() -> None:
     assert processed == 2
     assert toggler.toggle.call_count == 2
     assert logger.info.call_count == 2
+
+
+def test_process_event_loop_stops_after_stop_event_set() -> None:
+    events: queue.SimpleQueue[str] = queue.SimpleQueue()
+    events.put("double")
+
+    toggler = mock.create_autospec(ProcessToggler, instance=True)
+    toggler.toggle.return_value = True
+    logger = mock.create_autospec(logging.Logger)
+    stop_event = threading.Event()
+    stop_event.set()
+
+    processed = process_event_loop(
+        events=events,
+        toggler=toggler,
+        logger=logger,
+        command=["echo", "hi"],
+        poll_timeout=0.01,
+        max_events=None,
+        processed=0,
+        stop_event=stop_event,
+    )
+
+    assert processed == 1
+    toggler.toggle.assert_called_once()
+
+
+def test_listen_and_toggle_drains_events_on_keyboard_interrupt() -> None:
+    events: queue.SimpleQueue[str] = queue.SimpleQueue()
+    events.put("double")
+
+    def build_stream(**kwargs: object) -> mock.Mock:
+        raise KeyboardInterrupt
+
+    toggler_mock = mock.create_autospec(ProcessToggler, instance=True)
+    toggler_mock.toggle.return_value = True
+    logger = mock.create_autospec(logging.Logger)
+
+    listen_and_toggle(
+        CliOptions(
+            command=["echo", "hi"],
+            device=None,
+            sample_rate=default_config.sample_rate,
+            block_size=default_config.block_size,
+            threshold_multiplier=default_config.threshold_multiplier,
+            min_absolute_peak=default_config.min_absolute_peak,
+            double_window=(
+                default_config.double_clap_min,
+                default_config.double_clap_max,
+            ),
+            warmup=default_config.warmup_seconds,
+            clap_cooldown=default_config.min_clap_interval,
+            noise_floor_halflife=default_config.noise_floor_halflife,
+        ),
+        stream_factory=build_stream,
+        time_fn=lambda: 0.0,
+        toggler_factory=lambda cmd: cast(ProcessToggler, toggler_mock),
+        event_queue=events,
+        poll_timeout=0.01,
+        logger=logger,
+    )
+
+    toggler_mock.toggle.assert_called_once()
+    toggler_mock.stop.assert_called_once()
